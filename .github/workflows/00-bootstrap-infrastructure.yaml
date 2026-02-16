@@ -1,0 +1,147 @@
+name: "00 Bootstrap Infrastructure"
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "BOOTSTRAP" to confirm infrastructure setup'
+        required: true
+        type: string
+
+env:
+  APP_NAME: "chennai-flood-2025"
+  TENANT: "opsera"
+  ENVIRONMENT: "dev"
+  AWS_REGION: "us-west-2"
+  SPOKE_CLUSTER: "opsera-usw2-np"
+  HUB_CLUSTER: "argocd-usw2"
+  NAMESPACE: "opsera-chennai-flood-2025-dev"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  validate-input:
+    name: "Validate Input"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "BOOTSTRAP" ]; then
+            echo "❌ Invalid confirmation. Please type 'BOOTSTRAP' to proceed."
+            exit 1
+          fi
+          echo "✅ Confirmation validated"
+
+  bootstrap-infrastructure:
+    name: "Bootstrap Infrastructure"
+    runs-on: ubuntu-latest
+    needs: [validate-input]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get AWS Account ID
+        id: aws-account
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}" >> $GITHUB_ENV
+          echo "account_id=${AWS_ACCOUNT_ID}" >> $GITHUB_OUTPUT
+          echo "✅ AWS Account ID: ${AWS_ACCOUNT_ID}"
+
+      - name: Create ECR Repository (Idempotent)
+        id: create-ecr
+        run: |
+          ECR_REPO_NAME="${TENANT}-${APP_NAME}"
+          
+          # Check if repository exists
+          if aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${AWS_REGION} >/dev/null 2>&1; then
+            echo "✅ ECR repository ${ECR_REPO_NAME} already exists"
+          else
+            echo "📦 Creating ECR repository ${ECR_REPO_NAME}..."
+            aws ecr create-repository \
+              --repository-name ${ECR_REPO_NAME} \
+              --region ${AWS_REGION} \
+              --image-scanning-configuration scanOnPush=true \
+              --encryption-configuration encryptionType=AES256 \
+              --tags Key=app,Value=${APP_NAME} Key=tenant,Value=${TENANT} Key=managed-by,Value=github-actions
+            echo "✅ ECR repository created successfully"
+          fi
+          
+          ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+          echo "ecr_uri=${ECR_URI}" >> $GITHUB_OUTPUT
+          echo "✅ ECR URI: ${ECR_URI}"
+
+      - name: Configure kubectl for Spoke Cluster
+        run: |
+          aws eks update-kubeconfig --name ${SPOKE_CLUSTER} --region ${AWS_REGION}
+          echo "✅ kubectl configured for spoke cluster: ${SPOKE_CLUSTER}"
+
+      - name: Create/Update ECR Pull Secret (Idempotent)
+        run: |
+          ECR_REPO_NAME="${TENANT}-${APP_NAME}"
+          ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
+          
+          # Get ECR login token
+          ECR_TOKEN=$(aws ecr get-login-password --region ${AWS_REGION})
+          
+          # Create namespace if it doesn't exist
+          if ! kubectl get namespace ${NAMESPACE} >/dev/null 2>&1; then
+            echo "📦 Creating namespace ${NAMESPACE}..."
+            kubectl create namespace ${NAMESPACE}
+          else
+            echo "✅ Namespace ${NAMESPACE} already exists"
+          fi
+          
+          # Delete existing secret if it exists (to refresh token)
+          kubectl delete secret ecr-secret -n ${NAMESPACE} --ignore-not-found=true
+          
+          # Create new secret
+          kubectl create secret docker-registry ecr-secret \
+            --docker-server=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com \
+            --docker-username=AWS \
+            --docker-password=${ECR_TOKEN} \
+            --namespace=${NAMESPACE}
+          
+          echo "✅ ECR pull secret created/updated in namespace ${NAMESPACE}"
+
+      - name: Configure kubectl for Hub Cluster
+        run: |
+          aws eks update-kubeconfig --name ${HUB_CLUSTER} --region ${AWS_REGION}
+          echo "✅ kubectl configured for hub cluster: ${HUB_CLUSTER}"
+
+      - name: Create/Update ArgoCD Application (Idempotent)
+        run: |
+          echo "📦 Creating/Updating ArgoCD Application..."
+          kubectl apply -f argocd/application-dev.yaml
+          echo "✅ ArgoCD Application created/updated successfully"
+
+      - name: Verify ArgoCD Application
+        run: |
+          echo "🔍 Verifying ArgoCD Application..."
+          kubectl get application ${APP_NAME}-${ENVIRONMENT} -n argocd
+          echo "✅ ArgoCD Application verification complete"
+
+      - name: Bootstrap Summary
+        run: |
+          echo "╔══════════════════════════════════════════════════════════════╗"
+          echo "║              BOOTSTRAP INFRASTRUCTURE COMPLETE                ║"
+          echo "╠══════════════════════════════════════════════════════════════╣"
+          echo "║                                                              ║"
+          echo "║  ✅ ECR Repository Created/Verified                           ║"
+          echo "║  ✅ ECR Pull Secret Configured                                ║"
+          echo "║  ✅ Namespace Created (${NAMESPACE})                          ║"
+          echo "║  ✅ ArgoCD Application Deployed                               ║"
+          echo "║                                                              ║"
+          echo "╠══════════════════════════════════════════════════════════════╣"
+          echo "║  NEXT STEP: Trigger CI/CD Pipeline                           ║"
+          echo "║  Workflow: 10-ci-cd-dev.yaml                                 ║"
+          echo "╚══════════════════════════════════════════════════════════════╝"
