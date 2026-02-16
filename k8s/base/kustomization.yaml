@@ -19,5 +19,5 @@ labels:
 
 images:
   - name: PLACEHOLDER_ECR_URI
-    newName: PLACEHOLDER_ECR_URI
-    newTag: latest
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera-chennai-flood-2025
+    newTag: cd1e201-20260216173127
