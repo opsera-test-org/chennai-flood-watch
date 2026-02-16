@@ -21,8 +21,5 @@ patches:
       name: chennai-flood-2025
     patch: |-
       - op: replace
-        path: /spec/tls/0/hosts/0
-        value: opsera-chennai-flood-2025-dev.agent.opsera.dev
-      - op: replace
         path: /spec/rules/0/host
         value: opsera-chennai-flood-2025-dev.agent.opsera.dev

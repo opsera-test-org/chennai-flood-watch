@@ -8,15 +8,9 @@ metadata:
     environment: dev
     tenant: opsera
   annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
 spec:
   ingressClassName: nginx
-  tls:
-  - hosts:
-    - opsera-chennai-flood-2025-dev.agent.opsera.dev
-    secretName: chennai-flood-2025-tls
   rules:
   - host: opsera-chennai-flood-2025-dev.agent.opsera.dev
     http:
