@@ -22,9 +22,6 @@ jobs:
   bootstrap:
     name: Bootstrap AWS Infrastructure
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
 
     steps:
       - name: Checkout Code
@@ -33,9 +30,9 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GithubActionsRole
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.REGION }}
-          role-session-name: bootstrap-${{ env.APP_NAME }}
 
       - name: Check if ECR Repository Exists
         id: check_ecr
