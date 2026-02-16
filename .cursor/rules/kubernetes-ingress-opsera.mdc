@@ -29,14 +29,20 @@ spec:
   - host: opsera-{app}-{env}.agent.opsera.dev
 ```
 
-## ✅ CORRECT - ACM Wildcard Pattern
+## ✅ CORRECT - ACM Wildcard Pattern (RULE 107)
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
+  name: {app}
+  namespace: {namespace}
+  labels:
+    app: {app}
+    environment: {env}
+    tenant: opsera
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"  # ← Only NGINX annotation
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"  # REQUIRED for ACM
 spec:
   ingressClassName: nginx
   # NO TLS section - ACM wildcard cert covers *.agent.opsera.dev
@@ -59,6 +65,12 @@ spec:
 2. **Wildcard cert**: `*.agent.opsera.dev` already exists
 3. **No cert-manager needed**: Simpler infrastructure
 4. **Faster setup**: No per-app certificate provisioning
+
+## Required Annotation (RULE 107)
+
+**MUST include**: `nginx.ingress.kubernetes.io/force-ssl-redirect: "false"`
+
+This tells NGINX Ingress to NOT force redirect to HTTPS because ACM already handles HTTPS at the NLB level.
 
 ## Checklist Before Creating Ingress
 

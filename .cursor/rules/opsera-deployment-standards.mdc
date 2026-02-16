@@ -18,16 +18,20 @@ alwaysApply: true
 | **Hub Cluster** | `argocd-{region_short}` | e.g., argocd-usw2 |
 | **Spoke Cluster** | `{tenant}-{region_short}-np` | e.g., opsera-usw2-np |
 
-## Ingress Configuration Quick Reference
+## Ingress Configuration Quick Reference (RULE 107)
 
 ```yaml
-# For opsera tenant → Use ACM wildcard (no TLS section)
+# For opsera tenant → ACM wildcard pattern
 metadata:
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"  # REQUIRED
+  labels:
+    app: {app}
+    environment: {env}
+    tenant: opsera
 spec:
   ingressClassName: nginx
-  # NO tls: section
+  # NO tls: section (ACM handles HTTPS at NLB)
   rules:
   - host: opsera-{app}-{env}.agent.opsera.dev
 ```
@@ -36,7 +40,9 @@ spec:
 
 ❌ **DO NOT** add cert-manager annotations for opsera tenant  
 ❌ **DO NOT** include TLS section in ingress for opsera tenant  
-❌ **DO NOT** use domain "opsera.dev" (missing "agent.")  
+❌ **DO NOT** use `ssl-redirect` annotation (use `force-ssl-redirect` instead)  
+❌ **DO NOT** forget the `force-ssl-redirect: "false"` annotation (REQUIRED)  
+❌ **DO NOT** use domain "opsera.dev" (must be "agent.opsera.dev")  
 ❌ **DO NOT** create ECR with -latest tags (use timestamped tags)
 
 ## Pre-Generation Checklist
