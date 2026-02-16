@@ -277,30 +277,23 @@ jobs:
           if git diff --quiet; then
             echo "✅ No changes to commit"
           else
-            # Stash any changes first
+            # Add and commit changes first
             git add k8s/base/kustomization.yaml
-            
-            # Pull with rebase
-            if ! git pull --rebase origin main; then
-              echo "⚠️  Rebase conflict detected, attempting to resolve..."
-              git rebase --abort
-              git pull --no-rebase origin main
-            fi
-            
-            # Commit and push
             git commit -m "[skip ci] Update image tag to ${{ needs.build-image.outputs.image_tag }}"
+            echo "✅ Changes committed locally"
             
-            # Push with retry logic
+            # Pull with rebase and push with retry
             MAX_RETRIES=3
             for i in $(seq 1 $MAX_RETRIES); do
-              if git push origin main; then
-                echo "✅ Changes committed and pushed"
+              echo "Attempt $i/$MAX_RETRIES: Pulling and pushing..."
+              
+              if git pull --rebase origin main && git push origin main; then
+                echo "✅ Changes pulled and pushed successfully"
                 break
               else
                 if [ $i -lt $MAX_RETRIES ]; then
-                  echo "⚠️  Push failed, retrying ($i/$MAX_RETRIES)..."
-                  git pull --rebase origin main
-                  sleep 2
+                  echo "⚠️  Failed, retrying in 3 seconds..."
+                  sleep 3
                 else
                   echo "❌ Push failed after $MAX_RETRIES attempts"
                   exit 1
