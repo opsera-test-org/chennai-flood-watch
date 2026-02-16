@@ -22,6 +22,8 @@ jobs:
   bootstrap:
     name: Bootstrap AWS Infrastructure
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout Code
@@ -111,6 +113,7 @@ jobs:
           echo "- **Tenant:** ${{ env.TENANT }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Cloud Provider:** ${{ env.CLOUD_PROVIDER }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Authentication:** AWS Access Keys" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Resources Created" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ ECR Repository: \`${{ env.TENANT }}/${{ env.APP_NAME }}\`" >> $GITHUB_STEP_SUMMARY
@@ -121,4 +124,4 @@ jobs:
           echo "   - Hub: \`argocd-usw2\`" >> $GITHUB_STEP_SUMMARY
           echo "   - Spoke: \`${{ env.TENANT }}-usw2-np\`" >> $GITHUB_STEP_SUMMARY
           echo "2. Run the CI/CD workflow to build and deploy" >> $GITHUB_STEP_SUMMARY
-          echo "3. Setup HTTPS with cert-manager workflow" >> $GITHUB_STEP_SUMMARY
+          echo "3. Application URL: https://opsera-chflood-dev.agent.opsera.dev" >> $GITHUB_STEP_SUMMARY

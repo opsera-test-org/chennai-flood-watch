@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chflood-config
+  namespace: opsera-chflood-dev
+  labels:
+    app: chflood
+    tenant: opsera
+    managed-by: opsera
+data:
+  ENVIRONMENT: "dev"
+  PORT: "8080"
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"

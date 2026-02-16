@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chflood
+  namespace: opsera-chflood-dev
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  labels:
+    app: chflood
+    tenant: opsera
+    managed-by: opsera
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: opsera-chflood-dev.agent.opsera.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: chflood
+                port:
+                  number: 80
