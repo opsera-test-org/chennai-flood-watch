@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opsera-chennai-flood-watch-dev
+  labels:
+    tenant: opsera
+    app: chennai-flood-watch
+    environment: dev
+    managed-by: opsera-c2c
