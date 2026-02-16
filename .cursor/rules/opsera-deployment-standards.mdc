@@ -1,0 +1,48 @@
+---
+description: Opsera Code-to-Cloud deployment standards and patterns
+alwaysApply: true
+---
+
+# Opsera Deployment Standards
+
+## Tenant-Based Configuration Patterns
+
+### For tenant="opsera" deployments:
+
+| Component | Pattern | Notes |
+|-----------|---------|-------|
+| **Domain** | `agent.opsera.dev` | NOT opsera.dev or agents.opsera.dev |
+| **Subdomain** | `{tenant}-{app}-{env}.agent.opsera.dev` | e.g., opsera-myapp-dev.agent.opsera.dev |
+| **HTTPS** | ACM wildcard certificate | NO cert-manager |
+| **Ingress** | NGINX annotations only | NO TLS section in manifest |
+| **Hub Cluster** | `argocd-{region_short}` | e.g., argocd-usw2 |
+| **Spoke Cluster** | `{tenant}-{region_short}-np` | e.g., opsera-usw2-np |
+
+## Ingress Configuration Quick Reference
+
+```yaml
+# For opsera tenant → Use ACM wildcard (no TLS section)
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  ingressClassName: nginx
+  # NO tls: section
+  rules:
+  - host: opsera-{app}-{env}.agent.opsera.dev
+```
+
+## Common Mistakes to Avoid
+
+❌ **DO NOT** add cert-manager annotations for opsera tenant  
+❌ **DO NOT** include TLS section in ingress for opsera tenant  
+❌ **DO NOT** use domain "opsera.dev" (missing "agent.")  
+❌ **DO NOT** create ECR with -latest tags (use timestamped tags)
+
+## Pre-Generation Checklist
+
+Before generating Kubernetes manifests:
+1. Check tenant name → Determines ingress pattern
+2. Check domain → agent.opsera.dev for opsera tenant
+3. Choose correct pattern → ACM wildcard for opsera
+4. Verify cluster names → Use tenant in spoke cluster name
