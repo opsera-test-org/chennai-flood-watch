@@ -14,5 +14,5 @@ labels:
 
 images:
   - name: PLACEHOLDER_ECR_URI
-    newName: PLACEHOLDER_ECR_URI
-    newTag: latest
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chflood
+    newTag: 1b4ffe1-1771243345
