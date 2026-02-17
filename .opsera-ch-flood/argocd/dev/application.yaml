@@ -10,7 +10,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/REPLACE_WITH_YOUR_REPO.git
+    repoURL: https://github.com/opsera-test-org/chennai-flood-watch.git
     targetRevision: main
     path: .opsera-ch-flood/k8s/overlays/dev
   destination:

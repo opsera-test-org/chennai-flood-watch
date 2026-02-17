@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
       - name: ch-flood
-        image: PLACEHOLDER_ECR_URI:latest
+        image: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/ch-flood:latest
         ports:
         - containerPort: 8080
           name: http
