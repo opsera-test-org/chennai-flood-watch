@@ -9,7 +9,7 @@ resources:
 images:
   - name: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chennai-flood-01
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chennai-flood-01
-    newTag: 4dbea4e9-20260217065539
+    newTag: 6e1b1aa4-20260217073559
 
 labels:
   - pairs:
