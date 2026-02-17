@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: chennai-flood-2000
+  namespace: opsera-chennai-flood-2000-dev
+  labels:
+    app: chennai-flood-2000
+    tenant: opsera
+spec:
+  type: ClusterIP
+  selector:
+    app: chennai-flood-2000
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

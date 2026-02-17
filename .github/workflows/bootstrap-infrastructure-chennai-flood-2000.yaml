@@ -1,0 +1,142 @@
+name: Bootstrap Infrastructure - chennai-flood-2000
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to bootstrap'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Get AWS Account ID
+        id: aws-account
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
+          echo "AWS Account ID: $ACCOUNT_ID"
+
+      - name: Create ECR repository if not exists
+        id: ecr
+        run: |
+          REPO_NAME="opsera-chennai-flood-2000"
+          
+          # Check if repository exists
+          if aws ecr describe-repositories --repository-names "$REPO_NAME" --region us-west-2 2>/dev/null; then
+            echo "ECR repository $REPO_NAME already exists"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Creating ECR repository $REPO_NAME"
+            aws ecr create-repository \
+              --repository-name "$REPO_NAME" \
+              --region us-west-2 \
+              --image-scanning-configuration scanOnPush=true \
+              --encryption-configuration encryptionType=AES256
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "ECR repository $REPO_NAME created successfully"
+          fi
+          
+          ECR_URI="${{ steps.aws-account.outputs.account_id }}.dkr.ecr.us-west-2.amazonaws.com/$REPO_NAME"
+          echo "ecr_uri=$ECR_URI" >> $GITHUB_OUTPUT
+          echo "ECR URI: $ECR_URI"
+
+      - name: Configure kubectl for spoke cluster
+        run: |
+          aws eks update-kubeconfig \
+            --name opsera-usw2-np \
+            --region us-west-2
+
+      - name: Create namespace if not exists
+        run: |
+          NAMESPACE="opsera-chennai-flood-2000-${{ github.event.inputs.environment }}"
+          
+          if kubectl get namespace "$NAMESPACE" 2>/dev/null; then
+            echo "Namespace $NAMESPACE already exists"
+          else
+            echo "Creating namespace $NAMESPACE"
+            kubectl create namespace "$NAMESPACE"
+            kubectl label namespace "$NAMESPACE" \
+              tenant=opsera \
+              app=chennai-flood-2000 \
+              environment=${{ github.event.inputs.environment }}
+          fi
+
+      - name: Create service account with IRSA
+        run: |
+          NAMESPACE="opsera-chennai-flood-2000-${{ github.event.inputs.environment }}"
+          SA_NAME="chennai-flood-2000"
+          
+          # Check if service account exists
+          if kubectl get serviceaccount "$SA_NAME" -n "$NAMESPACE" 2>/dev/null; then
+            echo "Service account $SA_NAME already exists in namespace $NAMESPACE"
+          else
+            echo "Creating service account $SA_NAME in namespace $NAMESPACE"
+            cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: $SA_NAME
+  namespace: $NAMESPACE
+  labels:
+    app: chennai-flood-2000
+    tenant: opsera
+    environment: ${{ github.event.inputs.environment }}
+EOF
+          fi
+
+      - name: Create/Update ECR pull secret
+        run: |
+          NAMESPACE="opsera-chennai-flood-2000-${{ github.event.inputs.environment }}"
+          SECRET_NAME="ecr-registry-secret"
+          
+          # Get ECR login token
+          ECR_TOKEN=$(aws ecr get-login-password --region us-west-2)
+          ECR_REGISTRY="${{ steps.aws-account.outputs.account_id }}.dkr.ecr.us-west-2.amazonaws.com"
+          
+          # Delete existing secret if it exists
+          kubectl delete secret "$SECRET_NAME" -n "$NAMESPACE" 2>/dev/null || true
+          
+          # Create new secret
+          kubectl create secret docker-registry "$SECRET_NAME" \
+            --docker-server="$ECR_REGISTRY" \
+            --docker-username=AWS \
+            --docker-password="$ECR_TOKEN" \
+            -n "$NAMESPACE"
+          
+          echo "ECR pull secret created/updated successfully in namespace $NAMESPACE"
+
+      - name: Bootstrap summary
+        run: |
+          echo "### Bootstrap Infrastructure Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace:** opsera-chennai-flood-2000-${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**ECR Repository:** ${{ steps.ecr.outputs.ecr_uri }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Spoke Cluster:** opsera-usw2-np" >> $GITHUB_STEP_SUMMARY
+          echo "**Region:** us-west-2" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next Steps:**" >> $GITHUB_STEP_SUMMARY
+          echo "1. Generate Kubernetes manifests and ArgoCD application" >> $GITHUB_STEP_SUMMARY
+          echo "2. Trigger CI/CD workflow to build and deploy" >> $GITHUB_STEP_SUMMARY
