@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: opsera-chennai-flood-2025-dev
-  labels:
-    app: chennai-flood-2025
-    environment: dev
-    tenant: opsera
