@@ -7,9 +7,6 @@ on:
         description: 'Environment to bootstrap'
         required: true
         default: 'dev'
-        type: choice
-        options:
-          - dev
 
 permissions:
   contents: write

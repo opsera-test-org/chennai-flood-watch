@@ -11,13 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       grype_mode:
-        description: 'Grype scan mode'
+        description: 'Grype scan mode (warn or block)'
         required: false
         default: 'warn'
-        type: choice
-        options:
-          - warn
-          - block
 
 permissions:
   contents: write
