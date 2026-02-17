@@ -1,0 +1,332 @@
+name: Bootstrap Infrastructure - ch-flood
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant:
+        description: 'Tenant name'
+        required: true
+        default: 'opsera'
+      region:
+        description: 'AWS Region'
+        required: true
+        default: 'us-west-2'
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  APP_NAME: ch-flood
+  TENANT: ${{ github.event.inputs.tenant || 'opsera' }}
+  REGION: ${{ github.event.inputs.region || 'us-west-2' }}
+  HUB_CLUSTER: argocd-usw2
+  SPOKE_CLUSTER: opsera-usw2-np
+
+jobs:
+  setup-ecr:
+    name: Setup ECR Repository
+    runs-on: ubuntu-latest
+    outputs:
+      ecr_uri: ${{ steps.ecr.outputs.uri }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Get AWS Account ID
+        id: account
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${AWS_ACCOUNT_ID}" >> $GITHUB_OUTPUT
+          echo "✅ AWS Account: ${AWS_ACCOUNT_ID}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check ECR Repository
+        id: check_ecr
+        run: |
+          REPO_NAME="${{ env.TENANT }}/${{ env.APP_NAME }}"
+          if aws ecr describe-repositories --repository-names "$REPO_NAME" --region ${{ env.REGION }} 2>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✅ ECR repository exists: $REPO_NAME" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "📦 ECR repository will be created: $REPO_NAME" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Create ECR Repository
+        if: steps.check_ecr.outputs.exists == 'false'
+        run: |
+          aws ecr create-repository \
+            --repository-name ${{ env.TENANT }}/${{ env.APP_NAME }} \
+            --region ${{ env.REGION }} \
+            --image-scanning-configuration scanOnPush=true \
+            --image-tag-mutability IMMUTABLE \
+            --encryption-configuration encryptionType=AES256 \
+            --tags Key=App,Value=${{ env.APP_NAME }} Key=Tenant,Value=${{ env.TENANT }} Key=ManagedBy,Value=Opsera
+
+          echo "✅ Created ECR repository with IMMUTABLE tags" >> $GITHUB_STEP_SUMMARY
+
+      - name: Set ECR Lifecycle Policy
+        run: |
+          aws ecr put-lifecycle-policy \
+            --repository-name ${{ env.TENANT }}/${{ env.APP_NAME }} \
+            --region ${{ env.REGION }} \
+            --lifecycle-policy-text '{
+              "rules": [
+                {
+                  "rulePriority": 1,
+                  "description": "Keep last 10 images",
+                  "selection": {
+                    "tagStatus": "any",
+                    "countType": "imageCountMoreThan",
+                    "countNumber": 10
+                  },
+                  "action": {
+                    "type": "expire"
+                  }
+                }
+              ]
+            }'
+          echo "✅ Set lifecycle policy" >> $GITHUB_STEP_SUMMARY
+
+      - name: Output ECR URI
+        id: ecr
+        run: |
+          ECR_URI="${{ steps.account.outputs.account_id }}.dkr.ecr.${{ env.REGION }}.amazonaws.com/${{ env.TENANT }}/${{ env.APP_NAME }}"
+          echo "uri=${ECR_URI}" >> $GITHUB_OUTPUT
+          echo "**ECR URI:** \`${ECR_URI}\`" >> $GITHUB_STEP_SUMMARY
+
+  update-config-files:
+    name: Update Configuration Files
+    needs: setup-ecr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get GitHub Repository Info
+        id: repo
+        run: |
+          REPO_URL="https://github.com/${{ github.repository }}.git"
+          echo "repo_url=${REPO_URL}" >> $GITHUB_OUTPUT
+          echo "**Repository:** ${REPO_URL}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Update ArgoCD Application Repository URL
+        run: |
+          cd .opsera-${{ env.APP_NAME }}/argocd/dev
+          sed -i "s|repoURL:.*|repoURL: ${{ steps.repo.outputs.repo_url }}|g" application.yaml
+          echo "✅ Updated ArgoCD repoURL" >> $GITHUB_STEP_SUMMARY
+
+      - name: Update Kustomization ECR URI
+        run: |
+          cd .opsera-${{ env.APP_NAME }}/k8s/overlays/dev
+          sed -i "s|PLACEHOLDER_ECR_URI|${{ needs.setup-ecr.outputs.ecr_uri }}|g" kustomization.yaml
+          echo "✅ Updated kustomization ECR URI" >> $GITHUB_STEP_SUMMARY
+
+      - name: Update Base Deployment ECR URI
+        run: |
+          cd .opsera-${{ env.APP_NAME }}/k8s/base
+          sed -i "s|PLACEHOLDER_ECR_URI|${{ needs.setup-ecr.outputs.ecr_uri }}|g" deployment.yaml
+          echo "✅ Updated deployment ECR URI" >> $GITHUB_STEP_SUMMARY
+
+      - name: Commit Configuration Updates
+        run: |
+          git pull --rebase origin main || true
+          git add .opsera-${{ env.APP_NAME }}/
+          if git diff --staged --quiet; then
+            echo "No changes to commit" >> $GITHUB_STEP_SUMMARY
+          else
+            git commit -m "$(cat <<'EOF'
+          chore: bootstrap ch-flood configuration updates [skip ci]
+
+          - Updated ArgoCD repoURL
+          - Updated ECR URI placeholders
+
+          Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+          EOF
+          )"
+            git push origin main
+            echo "✅ Committed configuration updates" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  create-ecr-secret:
+    name: Create ECR Pull Secret
+    needs: [setup-ecr, update-config-files]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Update kubeconfig for Spoke Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.REGION }}
+          echo "✅ Connected to spoke cluster: ${{ env.SPOKE_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create Namespace
+        run: |
+          kubectl create namespace ${{ env.TENANT }}-${{ env.APP_NAME }}-dev --dry-run=client -o yaml | kubectl apply -f -
+          echo "✅ Namespace created: ${{ env.TENANT }}-${{ env.APP_NAME }}-dev" >> $GITHUB_STEP_SUMMARY
+
+      - name: Get AWS Account ID
+        id: account
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          echo "account_id=${AWS_ACCOUNT_ID}" >> $GITHUB_OUTPUT
+
+      - name: Create ECR Pull Secret
+        run: |
+          ECR_TOKEN=$(aws ecr get-login-password --region ${{ env.REGION }})
+          kubectl create secret docker-registry ecr-pull-secret \
+            --docker-server="${{ steps.account.outputs.account_id }}.dkr.ecr.${{ env.REGION }}.amazonaws.com" \
+            --docker-username=AWS \
+            --docker-password="${ECR_TOKEN}" \
+            --namespace=${{ env.TENANT }}-${{ env.APP_NAME }}-dev \
+            --dry-run=client -o yaml | kubectl apply -f -
+          echo "✅ ECR pull secret created" >> $GITHUB_STEP_SUMMARY
+
+  register-argocd-repo:
+    name: Register Repository with ArgoCD
+    needs: create-ecr-secret
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Update kubeconfig for Hub Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.REGION }}
+          echo "✅ Connected to hub cluster: ${{ env.HUB_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check ArgoCD Repository Secret
+        id: check_secret
+        run: |
+          REPO_URL="https://github.com/${{ github.repository }}.git"
+          SECRET_NAME=$(echo "$REPO_URL" | sed 's|https://||' | sed 's|/|-|g' | sed 's|\.|-|g')
+
+          if kubectl get secret "$SECRET_NAME" -n argocd 2>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✅ ArgoCD repo secret already exists" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "secret_name=${SECRET_NAME}" >> $GITHUB_OUTPUT
+            echo "📝 Will create ArgoCD repo secret" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Create ArgoCD Repository Secret
+        if: steps.check_secret.outputs.exists == 'false'
+        run: |
+          REPO_URL="https://github.com/${{ github.repository }}.git"
+          kubectl create secret generic ${{ steps.check_secret.outputs.secret_name }} \
+            --from-literal=type=git \
+            --from-literal=url="$REPO_URL" \
+            --from-literal=password="${{ secrets.GH_PAT }}" \
+            --from-literal=username=git \
+            --namespace=argocd \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          kubectl label secret ${{ steps.check_secret.outputs.secret_name }} \
+            argocd.argoproj.io/secret-type=repository \
+            --namespace=argocd --overwrite
+
+          echo "✅ ArgoCD repository secret created" >> $GITHUB_STEP_SUMMARY
+
+  apply-argocd-app:
+    name: Apply ArgoCD Application
+    needs: register-argocd-repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Update kubeconfig for Hub Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.REGION }}
+
+      - name: Check if ArgoCD Application Exists
+        id: check_app
+        run: |
+          if kubectl get application ${{ env.TENANT }}-${{ env.APP_NAME }}-dev -n argocd 2>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "✅ ArgoCD application already exists" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "📝 Will create ArgoCD application" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Apply ArgoCD Application
+        if: steps.check_app.outputs.exists == 'false'
+        run: |
+          kubectl apply -f .opsera-${{ env.APP_NAME }}/argocd/dev/application.yaml
+          echo "✅ ArgoCD application created: ${{ env.TENANT }}-${{ env.APP_NAME }}-dev" >> $GITHUB_STEP_SUMMARY
+
+      - name: Wait for ArgoCD Application to Sync
+        if: steps.check_app.outputs.exists == 'false'
+        run: |
+          echo "Waiting for initial sync (this may take a few minutes)..."
+          sleep 30
+          kubectl get application ${{ env.TENANT }}-${{ env.APP_NAME }}-dev -n argocd -o yaml
+          echo "✅ ArgoCD application is registered" >> $GITHUB_STEP_SUMMARY
+
+  bootstrap-summary:
+    name: Bootstrap Summary
+    needs: [setup-ecr, update-config-files, create-ecr-secret, register-argocd-repo, apply-argocd-app]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## 🚀 Bootstrap Infrastructure Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **App Name:** ${{ env.APP_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tenant:** ${{ env.TENANT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region:** ${{ env.REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Hub Cluster:** ${{ env.HUB_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Spoke Cluster:** ${{ env.SPOKE_CLUSTER }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Setup ECR | ${{ needs.setup-ecr.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Update Config | ${{ needs.update-config-files.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Create Secret | ${{ needs.create-ecr-secret.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Register Repo | ${{ needs.register-argocd-repo.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Apply ArgoCD | ${{ needs.apply-argocd-app.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Run the CI/CD workflow to build and deploy:" >> $GITHUB_STEP_SUMMARY
+          echo "   \`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "   gh workflow run ci-build-push-ch-flood-dev.yaml" >> $GITHUB_STEP_SUMMARY
+          echo "   \`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Monitor ArgoCD application:" >> $GITHUB_STEP_SUMMARY
+          echo "   - App: \`${{ env.TENANT }}-${{ env.APP_NAME }}-dev\`" >> $GITHUB_STEP_SUMMARY
+          echo "   - URL: https://${{ env.HUB_CLUSTER }}.agent.opsera.dev" >> $GITHUB_STEP_SUMMARY

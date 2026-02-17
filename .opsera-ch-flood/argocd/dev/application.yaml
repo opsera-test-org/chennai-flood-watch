@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: opsera-ch-flood-dev
+  namespace: argocd
+  labels:
+    app: ch-flood
+    tenant: opsera
+    environment: dev
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE_WITH_YOUR_REPO.git
+    targetRevision: main
+    path: .opsera-ch-flood/k8s/overlays/dev
+  destination:
+    name: opsera-usw2-np
+    namespace: opsera-ch-flood-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - Replace=true

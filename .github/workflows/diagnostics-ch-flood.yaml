@@ -1,0 +1,202 @@
+name: Diagnostics - ch-flood
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to diagnose'
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+          - staging
+          - prod
+      action:
+        description: 'Diagnostic action'
+        required: true
+        type: choice
+        options:
+          - full-diagnostics
+          - restart-pods
+          - sync-argocd
+          - check-logs
+          - verify-connectivity
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  APP_NAME: ch-flood
+  TENANT: opsera
+  REGION: us-west-2
+  HUB_CLUSTER: argocd-usw2
+  SPOKE_CLUSTER: opsera-usw2-np
+
+jobs:
+  diagnostics:
+    name: ${{ inputs.action }} - ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Setup kubectl for Hub Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.HUB_CLUSTER }} --region ${{ env.REGION }}
+
+      - name: Setup kubectl for Spoke Cluster
+        run: |
+          aws eks update-kubeconfig --name ${{ env.SPOKE_CLUSTER }} --region ${{ env.REGION }}
+
+      - name: Set Variables
+        id: vars
+        run: |
+          NAMESPACE="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ inputs.environment }}"
+          APP_FULL_NAME="${{ env.TENANT }}-${{ env.APP_NAME }}-${{ inputs.environment }}"
+          echo "namespace=${NAMESPACE}" >> $GITHUB_OUTPUT
+          echo "app_full_name=${APP_FULL_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Check ArgoCD Application Status
+        if: inputs.action == 'full-diagnostics' || inputs.action == 'sync-argocd'
+        run: |
+          # Switch to hub context
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.HUB_CLUSTER }}
+
+          echo "## 📊 ArgoCD Application Status" | tee -a $GITHUB_STEP_SUMMARY
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+
+          kubectl get application ${{ steps.vars.outputs.app_full_name }} -n argocd -o yaml | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Sync ArgoCD Application
+        if: inputs.action == 'sync-argocd'
+        run: |
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.HUB_CLUSTER }}
+
+          kubectl patch application ${{ steps.vars.outputs.app_full_name }} -n argocd \
+            --type merge \
+            -p '{"operation":{"initiatedBy":{"username":"github-actions-diagnostics"},"sync":{"revision":"main"}}}'
+
+          echo "✅ Triggered ArgoCD sync" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check Deployment Status
+        if: inputs.action == 'full-diagnostics'
+        run: |
+          # Switch to spoke context
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.SPOKE_CLUSTER }}
+
+          echo "## 📦 Deployment Status" | tee -a $GITHUB_STEP_SUMMARY
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+
+          kubectl get deployment ${{ env.APP_NAME }} -n ${{ steps.vars.outputs.namespace }} -o wide | tee -a $GITHUB_STEP_SUMMARY || echo "❌ Deployment not found"
+
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          kubectl describe deployment ${{ env.APP_NAME }} -n ${{ steps.vars.outputs.namespace }} | tee -a $GITHUB_STEP_SUMMARY || true
+
+      - name: Check Pod Status
+        if: inputs.action == 'full-diagnostics' || inputs.action == 'check-logs'
+        run: |
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.SPOKE_CLUSTER }}
+
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          echo "## 🔍 Pod Status" | tee -a $GITHUB_STEP_SUMMARY
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+
+          kubectl get pods -n ${{ steps.vars.outputs.namespace }} -l app=${{ env.APP_NAME }} -o wide | tee -a $GITHUB_STEP_SUMMARY
+
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          echo "### Pod Details" | tee -a $GITHUB_STEP_SUMMARY
+          kubectl describe pods -n ${{ steps.vars.outputs.namespace }} -l app=${{ env.APP_NAME }} | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Get Pod Logs
+        if: inputs.action == 'check-logs'
+        run: |
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.SPOKE_CLUSTER }}
+
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          echo "## 📝 Pod Logs" | tee -a $GITHUB_STEP_SUMMARY
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+
+          for POD in $(kubectl get pods -n ${{ steps.vars.outputs.namespace }} -l app=${{ env.APP_NAME }} -o jsonpath='{.items[*].metadata.name}'); do
+            echo "### Logs for $POD" | tee -a $GITHUB_STEP_SUMMARY
+            kubectl logs $POD -n ${{ steps.vars.outputs.namespace }} --tail=100 | tee -a $GITHUB_STEP_SUMMARY || true
+            echo "" | tee -a $GITHUB_STEP_SUMMARY
+          done
+
+      - name: Restart Pods
+        if: inputs.action == 'restart-pods'
+        run: |
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.SPOKE_CLUSTER }}
+
+          kubectl rollout restart deployment/${{ env.APP_NAME }} -n ${{ steps.vars.outputs.namespace }}
+          echo "✅ Restarted deployment" >> $GITHUB_STEP_SUMMARY
+
+          kubectl rollout status deployment/${{ env.APP_NAME }} -n ${{ steps.vars.outputs.namespace }} --timeout=300s
+          echo "✅ Rollout completed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check Service and Ingress
+        if: inputs.action == 'full-diagnostics' || inputs.action == 'verify-connectivity'
+        run: |
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.SPOKE_CLUSTER }}
+
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          echo "## 🌐 Service & Ingress" | tee -a $GITHUB_STEP_SUMMARY
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+
+          kubectl get service ${{ env.APP_NAME }} -n ${{ steps.vars.outputs.namespace }} -o wide | tee -a $GITHUB_STEP_SUMMARY || echo "❌ Service not found"
+
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          kubectl get ingress ${{ env.APP_NAME }} -n ${{ steps.vars.outputs.namespace }} -o wide | tee -a $GITHUB_STEP_SUMMARY || echo "❌ Ingress not found"
+
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          kubectl describe ingress ${{ env.APP_NAME }} -n ${{ steps.vars.outputs.namespace }} | tee -a $GITHUB_STEP_SUMMARY || true
+
+      - name: Test Connectivity
+        if: inputs.action == 'verify-connectivity'
+        run: |
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.SPOKE_CLUSTER }}
+
+          POD=$(kubectl get pod -n ${{ steps.vars.outputs.namespace }} -l app=${{ env.APP_NAME }} -o jsonpath='{.items[0].metadata.name}')
+
+          if [ -n "$POD" ]; then
+            echo "Testing connectivity to pod: $POD"
+            kubectl port-forward -n ${{ steps.vars.outputs.namespace }} $POD 8081:8080 &
+            PF_PID=$!
+            sleep 3
+
+            if wget -qO- --timeout=10 http://localhost:8081/ > /dev/null 2>&1; then
+              echo "✅ Pod connectivity test passed" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ Pod connectivity test failed" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            kill $PF_PID || true
+          else
+            echo "❌ No pods found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check Events
+        if: inputs.action == 'full-diagnostics'
+        run: |
+          kubectl config use-context arn:aws:eks:${{ env.REGION }}:$(aws sts get-caller-identity --query Account --output text):cluster/${{ env.SPOKE_CLUSTER }}
+
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+          echo "## 📋 Recent Events" | tee -a $GITHUB_STEP_SUMMARY
+          echo "" | tee -a $GITHUB_STEP_SUMMARY
+
+          kubectl get events -n ${{ steps.vars.outputs.namespace }} --sort-by='.lastTimestamp' | tail -20 | tee -a $GITHUB_STEP_SUMMARY
+
+      - name: Diagnostics Summary
+        if: always()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "**Action:** ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace:** ${{ steps.vars.outputs.namespace }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Application URL:** https://${{ env.TENANT }}-${{ env.APP_NAME }}-${{ inputs.environment }}.agent.opsera.dev" >> $GITHUB_STEP_SUMMARY
