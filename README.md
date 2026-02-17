@@ -1,5 +1,12 @@
 # Welcome to your Lovable project
 
+## Deployment Status
+
+🚀 **Deploying via Opsera Code-to-Cloud Enterprise v0.932**
+- Environment: dev
+- Cluster: opsera-usw2-np (AWS EKS)
+- URL: https://opsera-chennai-flood-2000-dev.agent.opsera.dev
+
 ## Project info
 
 **URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
