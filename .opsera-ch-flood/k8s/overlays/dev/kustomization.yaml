@@ -9,7 +9,7 @@ resources:
 images:
   - name: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/ch-flood
     newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/ch-flood
-    newTag: latest
+    newTag: dev-8f739fd8-20260217043221
 
 patches:
   - patch: |-
