@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chennai-flood-01-config
+  namespace: opsera-chennai-flood-01-dev
+  labels:
+    app: chennai-flood-01
+    tenant: opsera
+    managed-by: opsera
+data:
+  ENVIRONMENT: "dev"
+  APP_NAME: "chennai-flood-01"
+  PORT: "8080"
+  NODE_ENV: "production"
