@@ -24,7 +24,7 @@ spec:
         - name: ecr-pull-secret
       containers:
         - name: chennai-flood-01
-          image: PLACEHOLDER_ECR_URI:latest
+          image: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chennai-flood-01:latest
           imagePullPolicy: Always
           ports:
             - name: http

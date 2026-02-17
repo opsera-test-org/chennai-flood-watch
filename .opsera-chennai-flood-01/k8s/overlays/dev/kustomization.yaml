@@ -7,8 +7,8 @@ resources:
   - ../../base
 
 images:
-  - name: PLACEHOLDER_ECR_URI
-    newName: PLACEHOLDER_ECR_URI
+  - name: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chennai-flood-01
+    newName: 792373136340.dkr.ecr.us-west-2.amazonaws.com/opsera/chennai-flood-01
     newTag: latest
 
 labels:
